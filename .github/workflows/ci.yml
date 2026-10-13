@@ -1,0 +1,140 @@
+name: Privaagent CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test-and-verify:
+    runs-on: ubuntu-latest
+
+    env:
+      SESSION_TOKEN: ci-test-token-privaagent
+      VLM_PROVIDER: mock
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: 'npm'
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+          cache-dependency-path: server/requirements.txt
+
+      - name: Install Node Dependencies
+        run: |
+          cd extension
+          npm ci
+
+      - name: Install Python Dependencies
+        run: |
+          cd server
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx httpx2
+
+      - name: Compile TypeScript Verification
+        run: |
+          cd extension
+          npx tsc --noEmit
+
+      - name: Build Extension Bundles for Integration Tests
+        run: |
+          cd extension
+          npx vite build
+
+      - name: Extension Test - Live Chrome Visual Disclosure and OCR
+        run: |
+          cd extension
+          node ../tests/test_visual_browser_e2e.mjs
+
+      - name: Extension Test - DOM Perception
+        run: |
+          cd extension
+          npx tsx ../tests/test_dom_perception.mjs
+
+      - name: Extension Test - Privacy Engine
+        run: |
+          cd extension
+          npx tsx ../tests/test_privacy_engine.mjs
+
+      - name: Extension Test - Local Vision
+        run: |
+          cd extension
+          npx tsx ../tests/test_local_vision.mjs
+
+      - name: Extension Test - Screenshot Redaction Pixels
+        run: |
+          cd extension
+          node ./test-redaction-pixels.mjs
+
+      - name: Extension Test - Agent and Backend
+        run: |
+          cd extension
+          npx tsx ../tests/test_agent_and_backend.mjs
+
+      - name: Extension Test - Action Validator
+        run: |
+          cd extension
+          npx tsx ../tests/test_validator.mjs
+
+      - name: Extension Test - Security Regression Boundaries
+        run: |
+          cd extension
+          npx tsx ../tests/test_security_regressions.mjs
+
+      - name: Extension Test - UI and Overlays
+        run: |
+          cd extension
+          npx tsx ../tests/test_ui_and_overlays.mjs
+
+      - name: Extension Test - Multi-Turn Agent
+        run: |
+          cd extension
+          npx tsx ../tests/test_multiturn_agent.mjs
+
+      - name: Extension Test - Privacy Audit
+        run: |
+          cd extension
+          npx tsx ../tests/test_compliance_audit.mjs
+
+      - name: Audit Dashboard SHA-256 Verification Test
+        run: |
+          cd extension
+          npx tsx ../tests/test_audit_dashboard.mjs
+
+      - name: Extension Test - Synthetic Replacer and Audit Vault
+        run: |
+          cd extension
+          npx tsx ../tests/test_synthetic_replacer_and_audit_vault.mjs
+
+      - name: Extension Test - Red-Team Security
+        run: |
+          cd extension
+          npx tsx ../tests/test_redteam_security.mjs
+
+      - name: Run FastAPI Backend API, Visual Contract, and Schema Tests
+        run: |
+          cd server
+          python -m pytest -p no:cacheprovider ../tests/test_backend_api.py ../tests/test_backend_visual_contract.py ../tests/test_request_size_limit.py ../tests/test_contracts.py -v
+
+      - name: Run Live HTTP Trust Boundary Integration Test
+        run: |
+          cd extension
+          npx tsx ../tests/test_live_http_end_to_end.mjs
+
+      - name: Run Internal 5-Metric Benchmark Smoke Test
+        run: |
+          cd extension
+          npx tsx ../benchmark/scripts/run-benchmark.mjs

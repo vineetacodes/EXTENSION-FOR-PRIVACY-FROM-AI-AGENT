@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Disclosure",
+  "type": "object",
+  "required": [
+    "level",
+    "reason",
+    "elements"
+  ],
+  "properties": {
+    "level": {
+      "type": "string",
+      "enum": ["L0", "L1", "L2", "L3"],
+      "description": "L0: Local only, L1: Structured semantic context, L2: Sanitized visual crop, L3: Sanitized full screen"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Justification for this disclosure level based on task complexity and sensitivity"
+    },
+    "task": {
+      "type": "string",
+      "description": "The user task intent being resolved"
+    },
+    "elements": {
+      "type": "array",
+      "description": "Sanitized element descriptors permitted for transmission",
+      "items": {
+        "$ref": "#/$defs/DisclosedElement"
+      }
+    },
+    "crop_box": {
+      "type": "array",
+      "description": "[x, y, width, height] viewport coordinates for L2 visual crop",
+      "items": { "type": "number" },
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "screenshot_data": {
+      "type": "string",
+      "description": "Base64 encoded sanitized/redacted PNG data URL (used only in L2/L3)",
+      "pattern": "^data:image/png;base64,[A-Za-z0-9+/]+={0,2}$"
+    },
+    "redaction_manifest": {
+      "$ref": "#/$defs/RedactionManifest",
+      "description": "Visual redaction counts and boxes produced before the screenshot was sent"
+    },
+    "redacted_token_count": {
+      "type": "integer",
+      "description": "Number of PII/secret spans replaced with placeholder tokens in this disclosure"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "level": { "enum": ["L2", "L3"] }
+        },
+        "required": ["level"]
+      },
+      "then": {
+        "required": ["screenshot_data", "redaction_manifest"]
+      }
+    }
+  ],
+  "$defs": {
+    "RedactionManifest": {
+      "type": "object",
+      "description": "For L2/L3, sourceSensitiveBoxCount counts source sensitive regions; intersectingBoxCount counts those overlapping the transmitted image; redactedBoxCount must equal intersectingBoxCount and the number of redactedBoxes. L2 crops need not include unrelated off-crop regions.",
+      "required": [
+        "sourceSensitiveBoxCount",
+        "intersectingBoxCount",
+        "redactedBoxCount",
+        "redactedBoxes"
+      ],
+      "properties": {
+        "sourceSensitiveBoxCount": { "type": "integer", "minimum": 0 },
+        "intersectingBoxCount": { "type": "integer", "minimum": 0 },
+        "redactedBoxCount": { "type": "integer", "minimum": 0 },
+        "redactedBoxes": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "number" },
+            "minItems": 4,
+            "maxItems": 4
+          }
+        },
+        "sanitizationTimestamp": { "type": "number" }
+      }
+    },
+    "DisclosedElement": {
+      "type": "object",
+      "required": [
+        "target_id",
+        "role",
+        "label"
+      ],
+      "properties": {
+        "target_id": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string",
+          "description": "Sanitized text label with PII masked as tokens like [PERSON_1], [EMAIL]"
+        },
+        "bbox": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 4,
+          "maxItems": 4
+        }
+      }
+    }
+  }
+}

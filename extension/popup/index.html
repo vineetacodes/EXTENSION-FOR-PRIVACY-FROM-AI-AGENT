@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privaagent — Privacy protection</title>
+    <link rel="stylesheet" href="../src/common/design-tokens.css" />
+    <link rel="stylesheet" href="./popup.css" />
+  </head>
+  <body>
+    <header class="header" id="header">
+      <div class="brand">
+        <span class="brand-icon" id="logo" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3 20 6v5c0 5-3.4 8.3-8 10-4.6-1.7-8-5-8-10V6l8-3Z"/><path d="m8.5 12 2.2 2.2 4.8-5"/></svg>
+        </span>
+        <span class="brand-copy">
+          <span class="brand-name">Privaagent</span>
+          <span class="brand-sub">Privacy protection</span>
+        </span>
+      </div>
+      <div class="power-row">
+        <div class="shield-status on" id="shield-status">
+          <span class="status-dot on" id="status-dot"></span>
+          <span id="status-label">Active</span>
+        </div>
+        <label class="toggle" title="Show or hide visual privacy overlays">
+          <input class="toggle-input" type="checkbox" id="toggle-shield" checked />
+          <span class="toggle-track"><span class="toggle-thumb"></span></span>
+          <span class="visually-hidden">Visual privacy overlays</span>
+        </label>
+      </div>
+    </header>
+
+    <main class="main-content">
+      <section class="page-context" aria-label="Active tab">
+        <span class="page-context-label">Current page</span>
+        <span class="tab-url" id="tab-url">Reading active tab…</span>
+      </section>
+
+      <section class="status-card state-active" id="dynamic-status-card" aria-live="polite">
+        <span class="status-icon" id="status-icon-svg" aria-hidden="true">
+          <svg class="icon-lg" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg>
+        </span>
+        <span class="status-copy">
+          <span class="status-title" id="status-title">Protection Active</span>
+          <span class="status-desc" id="status-desc">This page is protected. Sensitive data is checked before any disclosure.</span>
+        </span>
+      </section>
+
+      <section class="metrics-grid" aria-label="Current page scan">
+        <div class="metric">
+          <span class="metric-val" id="m-latency">—</span>
+          <span class="metric-label">DOM scan</span>
+        </div>
+        <div class="metric">
+          <span class="metric-val" id="m-pii">—</span>
+          <span class="metric-label">Sensitive fields</span>
+        </div>
+        <div class="metric">
+          <span class="metric-val" id="m-secrets">—</span>
+          <span class="metric-label">Secrets found</span>
+        </div>
+      </section>
+
+      <section class="task-card" aria-labelledby="task-heading">
+        <div class="section-heading">
+          <h2 id="task-heading">What would you like to do?</h2>
+          <span class="architecture-label">L0-first</span>
+        </div>
+        <div class="input-row">
+          <input class="task-input" type="text" id="task-input" placeholder="Describe a browser task" autocomplete="off" />
+          <button class="btn btn-primary" id="btn-run" type="button">Run</button>
+        </div>
+        <div class="chips" aria-label="Example tasks">
+          <button class="chip" type="button" data-cmd="Open Rahul's invoice">Open example invoice</button>
+          <button class="chip" type="button" data-cmd="Click the bar representing Q4">Select Q4 bar</button>
+        </div>
+      </section>
+
+      <section class="health-card" aria-labelledby="health-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="health-heading">Runtime privacy health check</h2>
+            <p class="section-description">Local synthetic checks; no benchmark score and no test request sent.</p>
+          </div>
+          <button class="btn btn-secondary btn-small" id="btn-health-check" type="button">Run check</button>
+        </div>
+        <div class="health-results" id="health-results" aria-live="polite">
+          <div class="health-row"><span>Privacy detector vectors</span><span class="health-value" id="health-detectors">Not run</span></div>
+          <div class="health-row"><span>Outbound guard</span><span class="health-value" id="health-outbound">Not run</span></div>
+          <div class="health-row"><span>Audit chain</span><span class="health-value" id="health-audit">Not checked</span></div>
+          <div class="health-row"><span>Current DOM scan</span><span class="health-value" id="health-scan">Not measured</span></div>
+          <div class="health-row"><span>Privacy architecture</span><span class="health-value" id="health-mode">L0-first</span></div>
+          <div class="health-note" id="health-timestamp">Checks run locally with synthetic values.</div>
+          <button class="text-button" id="btn-export-health" type="button">Export check details</button>
+        </div>
+      </section>
+
+      <details class="details-panel" id="details-panel">
+        <summary>Protection and page details</summary>
+        <div class="details-content">
+          <ul class="protection-list">
+            <li>Tasks are attempted locally first.</li>
+            <li>Outbound disclosures pass a local privacy check.</li>
+            <li>Visual payloads require a matching redaction manifest.</li>
+          </ul>
+          <section class="feed-section" id="feed-section" aria-labelledby="feed-heading">
+            <div class="section-heading compact-heading">
+              <h3 id="feed-heading">Sensitive fields in this scan</h3>
+              <span class="feed-count" id="feed-count">Not scanned</span>
+            </div>
+            <div class="threat-feed" id="threat-feed"></div>
+          </section>
+
+          <section class="controls-row" aria-label="Advanced settings">
+            <label class="control-field" for="sel-mode">Redaction mode
+              <select class="select-pill" id="sel-mode" title="Redaction mode">
+                <option value="BLUR" selected>Blur overlay</option>
+                <option value="GHOST">Ghost mask (page style)</option>
+                <option value="SYNTHETIC">Synthetic replacement</option>
+              </select>
+            </label>
+            <label class="control-field" for="sel-ceiling">Disclosure ceiling
+              <select class="select-pill" id="sel-ceiling" title="Maximum disclosure level">
+                <option value="L0">L0 — Local only</option>
+                <option value="L1">L1 — Structured data</option>
+                <option value="L2" selected>L2 — Redacted crop</option>
+                <option value="L3">L3 — Redacted viewport</option>
+              </select>
+            </label>
+          </section>
+
+          <section class="ledger-box" id="ledger-box" aria-label="Last action details">
+            <div class="ledger-top">
+              <span class="ledger-head" id="ledger-head">Last action</span>
+              <span class="level-pill level-l0" id="ledger-level">Local</span>
+            </div>
+            <div class="ledger-row"><span class="k">Model</span><span class="v" id="l-model">—</span></div>
+            <div class="ledger-row"><span class="k">Execution</span><span class="v" id="l-backend">—</span></div>
+            <div class="ledger-row"><span class="k">Action</span><span class="v" id="l-action">—</span></div>
+            <div class="ledger-row"><span class="k">Target</span><span class="v" id="l-target">—</span></div>
+            <div class="ledger-row"><span class="k">Safety verdict</span><span class="v" id="l-verdict">—</span></div>
+            <div class="ledger-row"><span class="k">Local inference</span><span class="v" id="l-local-lat">—</span></div>
+            <div class="ledger-row"><span class="k">Sanitization</span><span class="v" id="l-san-lat">—</span></div>
+            <div class="ledger-row"><span class="k">VLM latency</span><span class="v" id="l-vlm-lat">—</span></div>
+            <div class="ledger-row"><span class="k">Total latency</span><span class="v" id="l-latency">—</span></div>
+            <div class="ledger-row"><span class="k">Masked entities</span><span class="v" id="l-entities">—</span></div>
+            <div class="ledger-row"><span class="k">External request</span><span class="v" id="l-ext-req">—</span></div>
+            <div class="ledger-row"><span class="k">Outbound payload</span><span class="v" id="l-bytes">—</span></div>
+            <div class="ledger-row"><span class="k">Pre-flight check</span><span class="v" id="l-privacy-guard">—</span></div>
+            <p class="ledger-reason" id="l-reason"></p>
+            <section class="confirmation-panel" id="confirmation-panel" aria-label="Action confirmation" aria-live="polite" hidden>
+              <strong>Approval required</strong>
+              <p id="confirmation-message"></p>
+              <div class="confirmation-actions">
+                <button class="btn btn-primary btn-small" id="confirmation-approve" type="button">Approve this action</button>
+                <button class="btn btn-secondary btn-small" id="confirmation-cancel" type="button">Cancel</button>
+              </div>
+            </section>
+          </section>
+        </div>
+      </details>
+
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+      <nav class="action-row" aria-label="More actions">
+        <button class="btn btn-secondary" id="btn-demo" type="button">Open demo</button>
+        <button class="btn btn-secondary" id="btn-portal" type="button">Audit records</button>
+        <button class="btn btn-secondary" id="btn-inspect" type="button">Session summary</button>
+        <button class="btn btn-text" id="btn-clear" type="button">Clear history</button>
+      </nav>
+      <footer class="footer">Local-first protection for browser tasks</footer>
+    </main>
+
+    <script type="module" src="./index.ts"></script>
+  </body>
+</html>

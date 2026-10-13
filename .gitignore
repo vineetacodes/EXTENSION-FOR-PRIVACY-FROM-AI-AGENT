@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+dist/
+build/
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+
+# Environment & local settings
+.env
+.env.local
+*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local scratch files
+scratch/
+*.log
+ppt-output/
+.codex-ppt-work/
+.codex-finalizer/
+
+# Tesseract WASM language data (downloaded at runtime, not committed)
+*.traineddata

@@ -1,0 +1,461 @@
+// UI convention: no emoji in rendered labels/badges — use the SVG
+// icon set from design-tokens.css. This file has regressed on this twice.
+// Live On-Page Privacy Overlay Layer — Tri-Mode Defense Engine
+// Modes:
+// 1. "BLUR" (Default) — Precision floating dark slate blur overlays with Range API exact sub-string bboxes.
+// 2. "GHOST" — Temporarily applies a masking CSS class to sensitive DOM elements.
+// 3. "SYNTHETIC" — Displays generated format-compatible example values for supported data types.
+
+import { PageElement, PageState } from "../common/types";
+import { getSubStringBoundingBox } from "../privacy/redactor";
+import { resolvePerceivedElement } from "../semantic/dom-extractor";
+import { SensitiveDetection } from "../privacy/sensitivity";
+import { BoundingBox } from "../common/types";
+import { generateSyntheticSurrogate } from "../privacy/synthetic-replacer";
+import { markExtensionUiNode } from "../semantic/extension-ui-nodes";
+
+const OVERLAY_CONTAINER_ID = "privaagent-redaction-root";
+const HUD_BADGE_ID = "privaagent-status-hud";
+const GHOST_STYLE_ID = "privaagent-ghost-style";
+
+const shieldSvg = `<svg class="icon" style="width:12px;height:12px;vertical-align:-2px;" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`;
+const ghostSvg = `<svg class="icon" style="width:12px;height:12px;vertical-align:-2px;" viewBox="0 0 24 24"><path fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path></svg>`;
+const synthSvg = `<svg class="icon" style="width:12px;height:12px;vertical-align:-2px;" viewBox="0 0 24 24"><polygon fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"></polygon></svg>`;
+
+type OverlayIcon = "lock" | "identity" | "financial" | "person" | "synthetic";
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+const OVERLAY_ICON_SHAPES: Record<OverlayIcon, Array<{ tag: "path" | "rect" | "circle" | "polygon"; attrs: Record<string, string> }>> = {
+  lock: [
+    { tag: "rect", attrs: { x: "5", y: "11", width: "14", height: "10", rx: "2" } },
+    { tag: "path", attrs: { d: "M8 11V7a4 4 0 0 1 8 0v4" } },
+  ],
+  identity: [
+    { tag: "path", attrs: { d: "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" } },
+    { tag: "path", attrs: { d: "M9 12h.01M12 12h4M9 16h7" } },
+  ],
+  financial: [
+    { tag: "rect", attrs: { x: "2", y: "5", width: "20", height: "14", rx: "2" } },
+    { tag: "path", attrs: { d: "M2 10h20M6 15h2" } },
+  ],
+  person: [
+    { tag: "circle", attrs: { cx: "12", cy: "8", r: "4" } },
+    { tag: "path", attrs: { d: "M5 21a7 7 0 0 1 14 0" } },
+  ],
+  synthetic: [
+    { tag: "polygon", attrs: { points: "12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2" } },
+  ],
+};
+
+function createOverlayIcon(doc: Document, icon: OverlayIcon): SVGSVGElement {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("class", "icon");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.style.cssText = "width:12px;height:12px;flex:0 0 12px;vertical-align:-2px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;";
+
+  for (const shape of OVERLAY_ICON_SHAPES[icon]) {
+    const element = doc.createElementNS(SVG_NS, shape.tag);
+    for (const [attribute, value] of Object.entries(shape.attrs)) {
+      element.setAttribute(attribute, value);
+    }
+    svg.appendChild(element);
+  }
+  return svg;
+}
+
+export type RedactionMode = "BLUR" | "GHOST" | "SYNTHETIC";
+
+interface OverlayEntry {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  label: string;
+  icon: OverlayIcon;
+  isSecret: boolean;
+  type: string;
+  syntheticValue?: string;
+}
+
+export class OverlayManager {
+  private container: HTMLDivElement | null = null;
+  private hudBadge: HTMLDivElement | null = null;
+  private ghostStyle: HTMLStyleElement | null = null;
+  private isVisible: boolean = true;
+  private mode: RedactionMode = "BLUR";
+  private doc: Document;
+  private lastPageState: PageState | null = null;
+  private ghostTaggedElements: Set<Element> = new Set();
+
+  constructor(doc?: Document) {
+    this.doc = doc || (typeof document !== "undefined" ? document : ({} as any));
+  }
+
+  private ensureGhostStyle(): void {
+    if (this.ghostStyle?.isConnected || !this.doc.head) return;
+    const style = this.doc.createElement("style");
+    style.id = GHOST_STYLE_ID;
+    markExtensionUiNode(style);
+    style.textContent = `
+        .privaagent-ghost-redacted {
+          color: transparent !important;
+          text-shadow: 0 0 10px rgba(56, 189, 248, 0.85) !important;
+          user-select: none !important;
+          -webkit-user-select: none !important;
+          pointer-events: none !important;
+        }
+      `;
+    this.doc.head.appendChild(style);
+    this.ghostStyle = style;
+  }
+
+  private removeGhostStyle(): void {
+    for (const el of this.ghostTaggedElements) {
+      el.classList.remove("privaagent-ghost-redacted");
+    }
+    this.ghostTaggedElements.clear();
+    if (this.ghostStyle?.parentNode) {
+      this.ghostStyle.parentNode.removeChild(this.ghostStyle);
+    }
+    this.ghostStyle = null;
+  }
+
+  private ensureContainer(): HTMLDivElement {
+    if (this.container?.isConnected) return this.container;
+    const container = this.doc.createElement("div");
+    container.id = OVERLAY_CONTAINER_ID;
+    markExtensionUiNode(container);
+    container.style.position = "fixed";
+    container.style.inset = "0";
+    container.style.width = "100%";
+    container.style.height = "100%";
+    container.style.pointerEvents = "none";
+    container.style.zIndex = "2147483640";
+    container.style.overflow = "hidden";
+
+    if (this.doc.body) {
+      this.doc.body.appendChild(container);
+    }
+    this.container = container;
+    return container;
+  }
+
+  public setMode(mode: RedactionMode): void {
+    this.mode = mode;
+    if (mode === "GHOST") {
+      this.ensureGhostStyle();
+    } else {
+      this.removeGhostStyle();
+    }
+    if (this.lastPageState) {
+      this.renderRedactionOverlays(this.lastPageState);
+    }
+  }
+
+  public getMode(): RedactionMode {
+    return this.mode;
+  }
+
+  public updateHUD(level: string = "L0", statusText: string = "Privacy Shield Active"): void {
+    if (!this.doc.body) return;
+
+    let hud = this.hudBadge;
+    if (!hud?.isConnected) {
+      hud = this.doc.createElement("div");
+      hud.id = HUD_BADGE_ID;
+      markExtensionUiNode(hud);
+      hud.style.position = "fixed";
+      hud.style.bottom = "16px";
+      hud.style.right = "16px";
+      hud.style.background = "#07090f";
+      hud.style.color = "#f1f5f9";
+      hud.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif';
+      hud.style.padding = "8px 14px";
+      hud.style.borderRadius = "24px";
+      hud.style.fontSize = "12px";
+      hud.style.fontWeight = "500";
+      hud.style.boxShadow = "0 4px 16px rgba(0,0,0,0.6), 0 0 0 1px rgba(56,189,248,0.18)";
+      hud.style.border = "1px solid #1e2d4a";
+      hud.style.zIndex = "2147483647";
+      hud.style.pointerEvents = "auto";
+      hud.style.display = "flex";
+      hud.style.alignItems = "center";
+      hud.style.gap = "8px";
+      hud.style.transition = "all 0.2s ease";
+      this.doc.body.appendChild(hud);
+    }
+
+    const modeLabel = this.mode === "GHOST" ? "Ghost mask" : this.mode === "SYNTHETIC" ? "Synthetic" : "Blur overlay";
+    const dot = this.doc.createElement("span");
+    dot.style.cssText = "display:inline-block;width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:#188038;";
+
+    const brand = this.doc.createElement("span");
+    brand.textContent = "Privaagent";
+    brand.style.fontWeight = "700";
+
+    const levelBadge = this.doc.createElement("span");
+    levelBadge.textContent = String(level).slice(0, 24);
+    levelBadge.style.cssText = "background:#e8f0fe;color:#1a73e8;padding:2px 7px;border-radius:12px;font-size:10px;font-weight:600;";
+
+    const modeBadge = this.doc.createElement("span");
+    modeBadge.textContent = modeLabel;
+    modeBadge.style.cssText = "background:#f1f3f4;color:#3c4043;padding:2px 6px;border-radius:5px;font-size:10px;";
+
+    const status = this.doc.createElement("span");
+    status.textContent = String(statusText).slice(0, 120);
+    status.style.cssText = "color:#5f6368;font-size:11px;margin-left:3px;";
+
+    hud.replaceChildren(dot, brand, levelBadge, modeBadge, status);
+    this.hudBadge = hud;
+  }
+
+  private computeLabel(type: string, isSecret: boolean): string {
+    if (this.mode === "SYNTHETIC") return generateSyntheticSurrogate(type);
+    if (isSecret) return "[SECRET]";
+    switch (type) {
+      case "EMAIL": return "[EMAIL]";
+      case "PHONE": return "[PHONE]";
+      case "AADHAAR": return "[AADHAAR]";
+      case "PAN": return "[PAN]";
+      case "CREDIT_CARD": return "[CARD]";
+      case "GSTIN": return "[GSTIN]";
+      case "DRIVING_LICENSE": return "[DL]";
+      case "BANK_ACCOUNT": return "[BANK A/C]";
+      case "DOB": return "[DOB]";
+      case "VEHICLE_RC": return "[RC]";
+      case "PASSPORT_IN": return "[PASSPORT]";
+      case "VOTER_ID": return "[VOTER ID]";
+      case "UPI_ID": return "[UPI]";
+      case "IFSC": return "[IFSC]";
+      case "PERSON": return "[NAME]";
+      case "PASSWORD": return "[PASSWORD]";
+      default: return "[REDACTED]";
+    }
+  }
+
+  private computeIcon(type: string, isSecret: boolean): OverlayIcon {
+    if (this.mode === "SYNTHETIC") return "synthetic";
+    if (isSecret) return "lock";
+
+    switch (type) {
+      case "AADHAAR":
+      case "PAN":
+      case "GSTIN":
+      case "DRIVING_LICENSE":
+      case "VEHICLE_RC":
+      case "PASSPORT_IN":
+      case "VOTER_ID":
+        return "identity";
+      case "CREDIT_CARD":
+      case "BANK_ACCOUNT":
+      case "UPI_ID":
+      case "IFSC":
+        return "financial";
+      case "EMAIL":
+      case "PHONE":
+      case "DOB":
+      case "PERSON":
+        return "person";
+      default:
+        return "lock";
+    }
+  }
+
+  private computeOverlayEntries(el: PageElement): OverlayEntry[] {
+    const detections = (el.metadata?.sensitive_detections as SensitiveDetection[] | undefined) || [];
+    const entries: OverlayEntry[] = [];
+
+    if (!el.sensitive || !el.bbox) return entries;
+    const [elemLeft, elemTop, elemWidth, elemHeight] = el.bbox;
+    if (elemWidth <= 0 || elemHeight <= 0) return entries;
+
+    const domEl = resolvePerceivedElement(el);
+
+    // GHOST mode temporarily applies a masking class to the live element.
+    if (this.mode === "GHOST" && domEl) {
+      domEl.classList.add("privaagent-ghost-redacted");
+      this.ghostTaggedElements.add(domEl);
+    }
+
+    if (detections.length === 0) {
+      entries.push({
+        left: elemLeft,
+        top: elemTop,
+        width: elemWidth,
+        height: elemHeight,
+        label: this.computeLabel("GENERIC", false),
+        icon: this.computeIcon("GENERIC", false),
+        isSecret: false,
+        type: "GENERIC",
+      });
+      return entries;
+    }
+
+    for (const detection of detections) {
+      const [spanStart, spanEnd] = detection.span;
+      let bbox: BoundingBox | null = null;
+
+      if (domEl) {
+        bbox = getSubStringBoundingBox(domEl, spanStart, spanEnd, detection.text);
+      }
+
+      const isSecret = detection.type === "SECRET_KEY";
+      const label = this.computeLabel(detection.type, isSecret);
+      const icon = this.computeIcon(detection.type, isSecret);
+
+      if (bbox && bbox[2] > 0 && bbox[3] > 0) {
+        const [bLeft, bTop, bWidth, bHeight] = bbox;
+        entries.push({
+          left: bLeft,
+          top: bTop,
+          width: this.mode === "SYNTHETIC" ? Math.max(bWidth, 140) : bWidth,
+          height: bHeight,
+          label,
+          icon,
+          isSecret,
+          type: detection.type,
+          syntheticValue: this.mode === "SYNTHETIC" ? generateSyntheticSurrogate(detection.type) : undefined,
+        });
+      } else {
+        entries.push({
+          left: elemLeft,
+          top: elemTop,
+          width: elemWidth,
+          height: elemHeight,
+          label,
+          icon,
+          isSecret,
+          type: detection.type,
+        });
+      }
+    }
+
+    return entries;
+  }
+
+  public renderRedactionOverlays(pageState: PageState): number {
+    this.lastPageState = pageState;
+    return this._doRender(pageState);
+  }
+
+  private _doRender(pageState: PageState): number {
+    const container = this.ensureContainer();
+    container.innerHTML = "";
+
+    if (this.mode === "GHOST") {
+      this.ensureGhostStyle();
+    }
+
+    if (!this.isVisible) {
+      this.removeGhostStyle();
+      return 0;
+    }
+
+    let overlayCount = 0;
+
+    for (const el of pageState.elements) {
+      if (!el.sensitive) continue;
+
+      const entries = this.computeOverlayEntries(el);
+
+      for (const entry of entries) {
+        const overlay = this.doc.createElement("div");
+        markExtensionUiNode(overlay);
+        overlay.className = "privaagent-blur-overlay";
+        overlay.style.position = "absolute";
+        overlay.style.left = `${entry.left}px`;
+        overlay.style.top = `${entry.top}px`;
+        overlay.style.width = `${entry.width}px`;
+        overlay.style.height = `${entry.height}px`;
+
+        if (this.mode === "GHOST") {
+          overlay.style.backgroundColor = "transparent";
+          overlay.style.border = "1px dashed #38bdf866";
+          overlay.style.borderRadius = "3px";
+        } else if (this.mode === "SYNTHETIC") {
+          overlay.style.backgroundColor = "rgba(15, 23, 42, 0.96)";
+          overlay.style.border = "1px solid #10b981";
+          overlay.style.borderRadius = "3px";
+        } else {
+          // Standard BLUR mode
+          overlay.style.backgroundColor = entry.isSecret ? "rgba(0, 0, 0, 0.98)" : "rgba(10, 15, 29, 0.93)";
+          overlay.style.backdropFilter = entry.isSecret ? "none" : "blur(6px)";
+          (overlay.style as any).webkitBackdropFilter = entry.isSecret ? "none" : "blur(6px)";
+          overlay.style.border = entry.isSecret ? "1px solid #ef4444" : "1px dashed #38bdf888";
+          overlay.style.borderRadius = "3px";
+        }
+
+        overlay.style.boxSizing = "border-box";
+        overlay.style.display = "flex";
+        overlay.style.alignItems = "center";
+        overlay.style.justifyContent = "center";
+        overlay.style.overflow = "hidden";
+
+        const badge = this.doc.createElement("span");
+        markExtensionUiNode(badge);
+        badge.style.fontSize = "9px";
+        badge.style.fontWeight = "bold";
+        badge.style.padding = "1px 4px";
+        badge.style.borderRadius = "2px";
+        badge.style.whiteSpace = "nowrap";
+        badge.style.overflow = "hidden";
+        badge.style.maxWidth = "100%";
+
+        if (this.mode === "SYNTHETIC") {
+          badge.style.color = "#34d399";
+          badge.style.background = "rgba(6, 78, 59, 0.85)";
+          badge.style.fontFamily = "monospace";
+        } else if (this.mode === "GHOST") {
+          badge.style.color = "#38bdf8";
+          badge.style.background = "rgba(14, 19, 32, 0.9)";
+        } else {
+          badge.style.color = entry.isSecret ? "#ef4444" : "#38bdf8";
+          badge.style.background = "rgba(10, 15, 29, 0.95)";
+        }
+
+        badge.appendChild(createOverlayIcon(this.doc, entry.icon));
+        badge.appendChild(this.doc.createTextNode(` ${String(entry.label).slice(0, 128)}`));
+        overlay.appendChild(badge);
+
+        container.appendChild(overlay);
+        overlayCount++;
+      }
+    }
+
+    return overlayCount;
+  }
+
+  public rerender(): void {
+    if (this.lastPageState) {
+      this._doRender(this.lastPageState);
+    }
+  }
+
+  public setVisible(visible: boolean): void {
+    this.isVisible = visible;
+    const container = this.ensureContainer();
+    container.style.display = visible ? "block" : "none";
+    if (!visible) {
+      this.removeGhostStyle();
+    } else if (this.mode === "GHOST") {
+      this.ensureGhostStyle();
+    }
+    if (this.hudBadge) {
+      this.hudBadge.style.opacity = visible ? "1" : "0.5";
+    }
+  }
+
+  public destroy(): void {
+    this.removeGhostStyle();
+    if (this.container && this.container.parentNode) {
+      this.container.parentNode.removeChild(this.container);
+    }
+    if (this.hudBadge && this.hudBadge.parentNode) {
+      this.hudBadge.parentNode.removeChild(this.hudBadge);
+    }
+    this.container = null;
+    this.hudBadge = null;
+  }
+}
